@@ -1,238 +1,217 @@
 # A-Little-Expression-Research
 
-This project explores a full image-classification workflow for facial expression / emotion detection using:
-* Hugging Face `datasets` (images stored as PIL objects inside dataset rows)
-* PyTorch training loop written from scratch (`train_step`, `test_step`, `train`)
-* A simple CNN baseline (TinyVGG) and a pretrained backbone (ResNet18)
-* A custom `collate_fn` to bridge Hugging Face datasets with PyTorch `DataLoader`
+This project documents the full engineering process of building an image classification system for facial expression detection using PyTorch.
 
-The notebook documents an iterative debugging process: handling dataset format issues, fixing transforms, stabilizing evaluation, resolving model shape mismatches, and improving performance with better architectures.
+Rather than starting from a pretrained model, the workflow begins with a manually implemented CNN (TinyVGG-style architecture) and gradually evolves toward a transfer learning solution (ResNet18).
+
+The repository captures:
+
+* Dataset handling using Hugging Face `datasets`
+* Custom PyTorch training loop (no high-level trainer)
+* Debugging model shape mismatches
+* Handling small-dataset instability
+* Transition from scratch CNN → pretrained backbone
+* Building a minimal inference app for demonstration
+
+This is not just a demo app — it is a structured exploration of deep learning system design.
 
 ---
 
-## Dataset
+# Project Philosophy
 
-The dataset is loaded from Hugging Face:
+Instead of directly importing a pretrained model and calling `.fit()`, this project was built step-by-step:
+
+1. Implement a baseline CNN from scratch
+2. Write custom `train_step` / `test_step` loops
+3. Understand batching and transforms deeply
+4. Identify overfitting and data-size limitations
+5. Introduce pretrained transfer learning
+6. Wrap the final model into a lightweight demo interface
+
+Each stage reveals a specific engineering or modeling insight.
+
+---
+
+# Stage 1: Custom TinyVGG (From Scratch)
+
+The first implementation was a small CNN inspired by TinyVGG:
+
+* Two convolutional blocks
+* ReLU activations
+* MaxPooling
+* Fully connected classifier
+
+Early issues encountered:
+
+* Shape mismatch when flattening
+* Hard-coded linear input size
+* Sensitivity to input resolution
+
+This was solved by introducing:
 
 ```python
-from datasets import load_dataset
-ds = load_dataset("sxdave/emotion_detection")
+nn.AdaptiveAvgPool2d((1,1))
 ```
 
-Each sample has the structure:
+which removes dependency on spatial input size.
+
+BatchNorm was later added to improve stability.
+
+---
+
+# Stage 2: Custom Training Pipeline
+
+Instead of using high-level training wrappers, the project defines:
+
+* `train_step()`
+* `test_step()`
+* `train()`
+
+Key learning points:
+
+* Correct device placement
+* Separating `model.train()` and `model.eval()`
+* Using `torch.inference_mode()` for evaluation
+* Manual accuracy calculation
+* Tracking metrics per epoch
+
+---
+
+# Stage 3: Hugging Face Dataset Integration
+
+Unlike `ImageFolder`, Hugging Face datasets return dictionary samples:
 
 ```python
 {"image": PIL.Image, "label": int}
 ```
 
-The number of classes is extracted from the dataset:
+To integrate with PyTorch `DataLoader`, a custom `collate_fn` was required to:
 
-```python
-num_classes = ds["train"].features["label"].num_classes
-```
+* Apply transforms
+* Stack tensors
+* Construct label tensors
 
----
+Critical realization:
 
-## Key Design Choice: Custom `collate_fn`
-
-Unlike `torchvision.datasets.ImageFolder`, Hugging Face datasets return dictionaries. A standard PyTorch `DataLoader` cannot automatically stack PIL images into tensors, so this project uses a **custom `collate_fn`** to:
-
-1. apply transforms (PIL → Tensor)
-2. stack tensors into a batch
-3. create a label tensor
-
-### Train / Eval transforms must be separated
-
-A major pitfall is applying **random augmentations** to validation/test sets. The final setup uses:
-
-* `train_transform` (may include random augmentation)
-* `test_transform` (no random augmentation)
-
-```python
-def collate_fn(batch):
-    images = [train_transform(x["image"]) for x in batch]
-    labels = [x["label"] for x in batch]
-    return torch.stack(images, 0), torch.tensor(labels)
-
-def test_fn(batch):
-    images = [test_transform(x["image"]) for x in batch]
-    labels = [x["label"] for x in batch]
-    return torch.stack(images, 0), torch.tensor(labels)
-```
+Validation and test sets must NOT use random augmentation.
 
 ---
 
-## DataLoaders
+# Stage 4: Overfitting & Dataset Size Effects
 
-```python
-from torch.utils.data import DataLoader
+On the small dataset:
 
-BATCH_SIZE = 16
+* Training accuracy quickly reached ~100%
+* Validation accuracy fluctuated significantly
+* Small test sets caused discrete accuracy jumps
 
-train_dataloader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True,
-                              num_workers=0, collate_fn=collate_fn)
+This revealed:
 
-valid_dataloader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False,
-                              num_workers=0, collate_fn=test_fn)
-
-test_dataloader = DataLoader(test_ds, batch_size=BATCH_SIZE, shuffle=False,
-                             num_workers=0, collate_fn=test_fn)
-```
+* The danger of overfitting
+* The instability of evaluation on small datasets
+* The importance of best-checkpoint saving
 
 ---
 
-## Training Loop (From Scratch)
+# Stage 5: Transition to Transfer Learning
 
-The project uses a classic structure:
-
-* `train_step()` for forward + backward + update
-* `test_step()` for evaluation with `torch.inference_mode()`
-* `train()` to run epochs and record metrics
-
-### `train_step()`
-
-* `model.train()`
-* forward pass
-* `loss.backward()`
-* `optimizer.step()`
-* compute accuracy
-
-### `test_step()`
-
-* `model.eval()`
-* `torch.inference_mode()`
-* forward pass only
-* compute loss + accuracy
-
-### `train()`
-
-Tracks results per epoch in a dict:
+To improve generalization, the model was switched to:
 
 ```python
-results = {
-  "train_loss": [], "train_acc": [],
-  "test_loss": [], "test_acc": []
-}
+torchvision.models.resnet18(weights=ResNet18_Weights.DEFAULT)
 ```
 
-> Note: During training, the notebook passes `valid_dataloader` as the evaluation loader (named `test_dataloader` in the function signature). The actual test set should be evaluated only at the end.
+Key lessons:
+
+* Always rebuild the optimizer when switching models
+* Freeze backbone first, then fine-tune
+* Use official ImageNet normalization for pretrained models
+* Transfer learning significantly stabilizes validation accuracy
+
+This marked the shift from experimental CNN design to practical deep learning engineering.
 
 ---
 
-## Baseline Model: TinyVGG
+# Final Output: Minimal Inference App
 
-A lightweight CNN inspired by CNN Explainer’s TinyVGG, used as a baseline.
+The final trained model is wrapped in a simple Gradio app.
 
-### Early issue: hardcoded classifier input size
+The goal is demonstration — not production deployment.
 
-A common CNN bug occurred when the classifier expected a fixed flattened size (depends on input resolution and padding). This was fixed by using **Adaptive Average Pooling**, so the classifier does not depend on spatial dimensions:
+The app:
 
-```python
-self.classifier = nn.Sequential(
-    nn.AdaptiveAvgPool2d((1, 1)),
-    nn.Flatten(),
-    nn.Linear(hidden_units, output_shape)
-)
-```
-
-### Improved TinyVGG (with BatchNorm)
-
-BatchNorm was introduced for better training stability:
-
-```python
-nn.Conv2d(..., padding=1),
-nn.BatchNorm2d(hidden_units),
-nn.ReLU(),
-```
+* Loads trained checkpoint
+* Applies correct preprocessing
+* Returns predicted label and class probabilities
 
 ---
 
-## Pretrained Backbone: ResNet18
+# How To Run
 
-To improve generalization on a small dataset, the project switches to **ResNet18 with ImageNet pretrained weights**:
-
-```python
-from torchvision import models
-model_1 = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
-model_1.fc = nn.Linear(model_1.fc.in_features, num_classes)
-model_1 = model_1.to(device)
-```
-
-### Critical bug discovered: optimizer bound to the wrong model
-
-At one point, training looked “stuck” because the optimizer was still created with `model_0.parameters()` (TinyVGG), so ResNet18 weights were not being updated.
-
-Fix: always rebuild the optimizer when changing models:
-
-```python
-optimizer = torch.optim.Adam(model_1.parameters(), lr=1e-3)
-```
-
-Or, for small datasets, train only the classification head:
-
-```python
-for p in model_1.parameters():
-    p.requires_grad = False
-for p in model_1.fc.parameters():
-    p.requires_grad = True
-
-optimizer = torch.optim.Adam(model_1.fc.parameters(), lr=1e-3, weight_decay=1e-4)
-```
+There are two ways to explore this project:
 
 ---
 
-## Observations & Lessons Learned
+## Option 1 — Explore the Full Development Process
 
-### 1) Small validation/test sets can cause unstable accuracy
-
-When validation/test sets are small, accuracy changes in **large discrete steps** (a few images can move accuracy by several percent). This makes results appear “jumpy” even when training is stable.
-
-### 2) Overfitting is easy on small datasets
-
-Some runs reached **near-100% train accuracy** while validation accuracy stayed around ~0.5–0.6, indicating overfitting. This motivates:
-
-* early stopping / best checkpoint saving
-* weight decay
-* stronger (but realistic) augmentation
-* pretrained backbones
-
-### 3) Always keep evaluation “clean”
-
-Validation/test must not include random augmentation.
-
-### 4) Always verify training is actually updating the right parameters
-
-When results look suspiciously flat, check:
-
-* `requires_grad` flags
-* optimizer parameter groups
-* gradient values on key layers
-
----
-
-## How to Run
-
-1. Install dependencies:
+Open the notebook:
 
 ```bash
-pip install torch torchvision datasets tqdm
+jupyter notebook Expression_detect.ipynb
 ```
 
-2. Open and run the notebook:
+The notebook walks through:
 
-* `Expression_detect.ipynb`
+* Dataset loading
+* Transform design
+* TinyVGG implementation
+* Debugging issues
+* ResNet18 transition
+* Training logs and evaluation
 
-The notebook will:
-
-* load the dataset from Hugging Face
-* build dataloaders with custom `collate_fn`
-* train TinyVGG baseline
-* train ResNet18 pretrained model
-* print epoch-by-epoch loss/accuracy
+This is recommended if you want to understand the full reasoning process.
 
 ---
 
-## Project Structure
+## Option 2 — Run the Demo App
 
-* `Expression_detect.ipynb` — main experiment notebook (data loading, training, debugging, results)
-*  `README.md` — this file
+Install dependencies:
+
+```bash
+pip install torch torchvision datasets gradio tqdm pillow
+```
+
+Run:
+
+```bash
+python demo.py
+```
+
+Open in browser:
+
+```
+http://127.0.0.1:7860
+```
+
+Upload an image to see prediction results.
+
+---
+
+# Technical Stack
+
+* Python 3.x
+* PyTorch
+* Torchvision
+* Hugging Face Datasets
+* Gradio
+
+---
+
+# Key Engineering Takeaways
+
+* Writing your own training loop builds deeper understanding.
+* Small datasets amplify evaluation instability.
+* Adaptive pooling prevents classifier shape bugs.
+* Pretrained models dramatically improve small-data performance.
+* Always verify optimizer parameter bindings.
+* Separate train and evaluation transforms strictly.
