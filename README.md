@@ -232,15 +232,6 @@ The notebook will:
 
 ---
 
-## Recommended Next Steps
-
-* **Best-checkpoint saving** based on lowest validation loss
-* **Fine-tuning**: unfreeze `layer4` of ResNet18 with a smaller learning rate (e.g. `1e-4`)
-* **K-fold cross validation** for more reliable evaluation on small datasets
-* Confusion matrix + per-class metrics (macro F1) to understand class-wise performance
-
----
-
 ## Project Structure
 
 * `Expression_detect.ipynb` — main experiment notebook (data loading, training, debugging, results)
