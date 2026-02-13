@@ -8,7 +8,7 @@ from torchvision.models import ResNet18_Weights
 # -----------------------
 # Config
 # -----------------------
-CHECKPOINT_PATH = "/Users/yangtianchi/Downloads/best_resnet18.pth"   
+CHECKPOINT_PATH = "best_resnet18.pth"   
 NUM_CLASSES = 3                        
 CLASS_NAMES = ["happy", "neutral", "sad"] 
 
